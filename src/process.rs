@@ -311,6 +311,24 @@ pub fn process_tile(
     input_file: &Path,
     skip_rendering: bool,
 ) -> Result<(), Box<dyn Error>> {
+    process_tiles(
+        fs,
+        config,
+        thread,
+        tmpfolder,
+        &[input_file.to_path_buf()],
+        skip_rendering,
+    )
+}
+
+pub fn process_tiles(
+    fs: &impl FileSystem,
+    config: &Config,
+    thread: &String,
+    tmpfolder: &Path,
+    input_files: &[PathBuf],
+    skip_rendering: bool,
+) -> Result<(), Box<dyn Error>> {
     let mut timing = Timing::start_now("process_tile");
     fs.create_dir_all(tmpfolder)
         .expect("Could not create tmp folder");
@@ -325,15 +343,100 @@ pub fn process_tile(
     timing.start_section("preparing input file");
     info!("Preparing input file");
 
-    let filename = input_file
-        .file_name()
-        .ok_or_else(|| format!("No extension for input file {}", input_file.display()))?
-        .to_string_lossy()
-        .to_lowercase();
-
     let target_file = tmpfolder.join("xyztemp.xyz.bin");
 
-    if filename.ends_with(".xyz") {
+    if input_files.is_empty() {
+        return Err("No input files provided".into());
+    }
+
+    let all_las_laz = input_files.iter().all(|input_file| {
+        input_file
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
+            })
+    });
+
+    if all_las_laz {
+        info!("Converting points from .las/.laz files to internal binary format");
+        let &Config {
+            thinfactor,
+            xfactor,
+            yfactor,
+            zfactor,
+            zoff,
+            ..
+        } = config;
+
+        if thinfactor != 1.0 {
+            info!("Using thinning factor {thinfactor}");
+        }
+
+        let mut rng = rand::rng();
+        let randdist = rand::distr::Bernoulli::new(thinfactor).unwrap();
+
+        let options = las::ReaderOptions::default().with_laz_parallelism(if config.laz_parallel {
+            las::LazParallelism::Yes
+        } else {
+            las::LazParallelism::No
+        });
+        let mut writer =
+            XyzInternalWriter::new(fs.create(&target_file).expect("Could not create writer"));
+        let mut records = Vec::with_capacity(LAZ_BUFFER_SIZE);
+
+        for input_file in input_files {
+            info!("Reading {}", input_file.display());
+            let mut reader = Reader::with_options(
+                fs.open(input_file).expect("Could not open file"),
+                options,
+            )
+            .expect("Could not create reader");
+
+            let mut pd = PointDataBuilder::new().for_header(reader.header()).build();
+            loop {
+                let n = reader.fill_points(LAZ_BUFFER_SIZE as u64, &mut pd).unwrap();
+
+                if n == 0 {
+                    break;
+                }
+
+                records.clear();
+                for (pt_x, pt_y, pt_z, pt_classification, pt_number_of_returns, pt_return_number) in izip!(
+                    pd.x(),
+                    pd.y(),
+                    pd.z(),
+                    pd.classification(),
+                    pd.number_of_returns(),
+                    pd.return_number()
+                ) {
+                    if thinfactor == 1.0 || rng.sample(randdist) {
+                        records.push(crate::io::xyz::XyzRecord {
+                            x: pt_x * xfactor,
+                            y: pt_y * yfactor,
+                            z: (pt_z * zfactor + zoff) as f32,
+                            classification: pt_classification,
+                            number_of_returns: pt_number_of_returns,
+                            return_number: pt_return_number,
+                            ..Default::default()
+                        });
+                    }
+                }
+
+                writer.write_records(&records)?;
+            }
+        }
+        writer.finish().expect("Unable to finish writing");
+    } else if input_files.len() > 1 {
+        return Err("Multiple input files are only supported for LAS/LAZ files".into());
+    } else if input_files[0]
+        .file_name()
+        .ok_or_else(|| format!("No extension for input file {}", input_files[0].display()))?
+        .to_string_lossy()
+        .to_lowercase()
+        .ends_with(".xyz")
+    {
+        let input_file = &input_files[0];
         // if we are here we don't know if the file has at least 6 columns, but we assume that it is in the format
         // x y z classification number_of_returns return_number
 
@@ -366,79 +469,16 @@ pub fn process_tile(
         })
         .expect("Could not read file");
         writer.finish().expect("Unable to finish writing");
-    } else if filename.ends_with(".laz") || filename.ends_with(".las") {
-        info!("Converting points from .laz/laz to internal binary format");
-        let &Config {
-            thinfactor,
-            xfactor,
-            yfactor,
-            zfactor,
-            zoff,
-            ..
-        } = config;
-
-        if thinfactor != 1.0 {
-            info!("Using thinning factor {thinfactor}");
-        }
-
-        let mut rng = rand::rng();
-        let randdist = rand::distr::Bernoulli::new(thinfactor).unwrap();
-
-        let options = las::ReaderOptions::default().with_laz_parallelism(if config.laz_parallel {
-            las::LazParallelism::Yes
-        } else {
-            las::LazParallelism::No
-        });
-        let mut reader =
-            Reader::with_options(fs.open(input_file).expect("Could not open file"), options)
-                .expect("Could not create reader");
-
-        debug!("Writing records to {:?}", target_file);
-        let mut writer =
-            XyzInternalWriter::new(fs.create(&target_file).expect("Could not create writer"));
-
-        let mut records = Vec::with_capacity(LAZ_BUFFER_SIZE);
-        let mut pd = PointDataBuilder::new().for_header(reader.header()).build();
-        loop {
-            let n = reader.fill_points(LAZ_BUFFER_SIZE as u64, &mut pd).unwrap();
-
-            if n == 0 {
-                break;
-            }
-
-            // convert all read points to records
-            records.clear();
-            for (pt_x, pt_y, pt_z, pt_classification, pt_number_of_returns, pt_return_number) in izip!(
-                pd.x(),
-                pd.y(),
-                pd.z(),
-                pd.classification(),
-                pd.number_of_returns(),
-                pd.return_number()
-            ) {
-                if thinfactor == 1.0 || rng.sample(randdist) {
-                    records.push(crate::io::xyz::XyzRecord {
-                        x: pt_x * xfactor,
-                        y: pt_y * yfactor,
-                        z: (pt_z * zfactor + zoff) as f32,
-                        classification: pt_classification,
-                        number_of_returns: pt_number_of_returns,
-                        return_number: pt_return_number,
-                        ..Default::default()
-                    });
-                }
-            }
-
-            // write all at once
-            writer.write_records(&records)?;
-        }
-        writer.finish().expect("Unable to finish writing");
-    } else if filename.ends_with(".xyz.bin") {
+    } else if input_files[0]
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().to_lowercase().ends_with(".xyz.bin"))
+    {
+        let input_file = &input_files[0];
         info!("Copying input file");
         fs.copy(input_file, target_file)
             .expect("Could not copy file");
     } else {
-        return Err(format!("Unsupported input file: {}", input_file.display()).into());
+        return Err(format!("Unsupported input file: {}", input_files[0].display()).into());
     }
 
     info!("Done");

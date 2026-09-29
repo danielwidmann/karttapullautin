@@ -43,6 +43,10 @@ You can run the `pullauta` executable with the path to your file as argument:
     
     ./pullauta L3323H3.laz
 
+To load and process the points from multiple LAS/LAZ files together, pass multiple paths (a shell wildcard is supported):
+
+    ./pullauta ./data/*.laz
+
 > Note: By defaut messages with the log level _info_ will be printed to the console. To show more information (eg. timings of each operation),
 > set the `RUST_LOG` environment variable to `debug` or specify it on the command line like so:
 > ```bash
@@ -180,4 +184,3 @@ The new binary will be accessible in the `target/release/` directory
 ## Contributors
 
 @jagge @rphlo @antbern
-

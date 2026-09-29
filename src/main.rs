@@ -418,27 +418,36 @@ fn main() {
         || command_lowercase.ends_with(".xyz")
         || command_lowercase.ends_with(".xyz.bin")
     {
-        let mut norender: bool = false;
-        if args.len() > 1 {
-            norender = args[1].clone() == "norender";
-        }
+        let norender = args.iter().any(|arg| arg == "norender");
+        let input_files: Vec<PathBuf> = std::iter::once(command.clone())
+            .chain(args.iter().filter(|arg| {
+                let arg = arg.to_lowercase();
+                arg.ends_with(".las") || arg.ends_with(".laz")
+            }).cloned())
+            .map(PathBuf::from)
+            .collect();
 
         if config.experimental_use_in_memory_fs {
             let fs = pullauta::io::fs::memory::MemoryFileSystem::new();
 
-            debug!("Copying input file into memory fs: {command}");
-            // copy the input file into the memory file system
-            fs.load_from_disk(Path::new(&command), Path::new("input.laz"))
-                .expect("Could not copy input file into memory fs");
+            let mut memory_input_files = Vec::with_capacity(input_files.len());
+            for (index, input_file) in input_files.iter().enumerate() {
+                let extension = input_file.extension().unwrap().to_string_lossy();
+                let memory_input = PathBuf::from(format!("input_{index}.{extension}"));
+                debug!("Copying input file into memory fs: {}", input_file.display());
+                fs.load_from_disk(input_file, &memory_input)
+                    .expect("Could not copy input file into memory fs");
+                memory_input_files.push(memory_input);
+            }
 
             debug!("Done");
 
-            pullauta::process::process_tile(
+            pullauta::process::process_tiles(
                 &fs,
                 &config,
                 &thread,
                 &tmpfolder,
-                Path::new("input.laz"),
+                &memory_input_files,
                 norender,
             )
             .unwrap();
@@ -454,12 +463,12 @@ fn main() {
             copy(&fs, "pullautus.png");
             copy(&fs, "pullautus_depr.png");
         } else {
-            pullauta::process::process_tile(
+            pullauta::process::process_tiles(
                 &fs,
                 &config,
                 &thread,
                 &tmpfolder,
-                Path::new(&command),
+                &input_files,
                 norender,
             )
             .unwrap();
