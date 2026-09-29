@@ -47,6 +47,10 @@ To load and process the points from multiple LAS/LAZ files together, pass multip
 
     ./pullauta ./data/*.laz
 
+On Windows, where the shell may pass wildcards through without expanding them, pass the wildcard directly:
+
+    pullauta.exe C:\mapdata\golden_ears\*.laz
+
 > Note: By defaut messages with the log level _info_ will be printed to the console. To show more information (eg. timings of each operation),
 > set the `RUST_LOG` environment variable to `debug` or specify it on the command line like so:
 > ```bash

@@ -9,6 +9,83 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+fn expand_input_paths(inputs: &[String]) -> std::io::Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+
+    for input in inputs {
+        let path = Path::new(input);
+        let Some(pattern) = path.file_name().and_then(|name| name.to_str()) else {
+            expanded.push(path.to_path_buf());
+            continue;
+        };
+
+        if !pattern.contains(['*', '?']) {
+            expanded.push(path.to_path_buf());
+            continue;
+        }
+
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut matches = Vec::new();
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|name| wildcard_matches(pattern, name))
+            {
+                let path = entry.path();
+                if path.is_file() {
+                    matches.push(path);
+                }
+            }
+        }
+
+        if matches.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No files matched wildcard pattern: {input}"),
+            ));
+        }
+        expanded.extend(matches);
+    }
+
+    expanded.sort();
+    Ok(expanded)
+}
+
+fn wildcard_matches(pattern: &str, value: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let value: Vec<char> = value.chars().collect();
+    let (mut pattern_index, mut value_index) = (0, 0);
+    let mut star_index = None;
+    let mut value_after_star = 0;
+
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == '?'
+                || pattern[pattern_index].eq_ignore_ascii_case(&value[value_index]))
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            value_after_star = value_index;
+        } else if let Some(star_index) = star_index {
+            value_after_star += 1;
+            value_index = value_after_star;
+            pattern_index = star_index + 1;
+        } else {
+            return false;
+        }
+    }
+
+    pattern[pattern_index..].iter().all(|&c| c == '*')
+}
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -419,7 +496,7 @@ fn main() {
         || command_lowercase.ends_with(".xyz.bin")
     {
         let norender = args.iter().any(|arg| arg == "norender");
-        let input_files: Vec<PathBuf> = std::iter::once(command.clone())
+        let input_paths: Vec<String> = std::iter::once(command.clone())
             .chain(
                 args.iter()
                     .filter(|arg| {
@@ -428,8 +505,14 @@ fn main() {
                     })
                     .cloned(),
             )
-            .map(PathBuf::from)
             .collect();
+        let input_files = match expand_input_paths(&input_paths) {
+            Ok(paths) => paths,
+            Err(error) => {
+                log::error!("Could not resolve input file paths: {error}");
+                return;
+            }
+        };
 
         if config.experimental_use_in_memory_fs {
             let fs = pullauta::io::fs::memory::MemoryFileSystem::new();
@@ -465,6 +548,43 @@ fn main() {
                     info!("Copying {name} from memory fs to disk");
                     fs.save_to_disk(name, name)
                         .expect("Could not copy from memory fs to disk");
+                }
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use super::{expand_input_paths, wildcard_matches};
+
+                #[test]
+                fn wildcard_matches_multiple_and_single_characters() {
+                    assert!(wildcard_matches("tile_*.laz", "tile_01.LAZ"));
+                    assert!(wildcard_matches("tile_0?.laz", "tile_01.laz"));
+                    assert!(!wildcard_matches("tile_0?.laz", "tile_001.laz"));
+                }
+
+                #[test]
+                fn expands_matching_input_files() {
+                    let directory = std::env::temp_dir().join(format!(
+                        "pullauta-wildcard-test-{}-{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ));
+                    std::fs::create_dir_all(&directory).unwrap();
+                    std::fs::write(directory.join("one.laz"), []).unwrap();
+                    std::fs::write(directory.join("two.laz"), []).unwrap();
+                    std::fs::write(directory.join("ignore.txt"), []).unwrap();
+
+                    let pattern = directory.join("*.laz").to_string_lossy().into_owned();
+                    let paths = expand_input_paths(&[pattern]).unwrap();
+
+                    assert_eq!(
+                        paths,
+                        vec![directory.join("one.laz"), directory.join("two.laz")]
+                    );
+                    std::fs::remove_dir_all(directory).unwrap();
                 }
             }
             copy(&fs, "pullautus.png");
