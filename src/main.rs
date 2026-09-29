@@ -420,10 +420,14 @@ fn main() {
     {
         let norender = args.iter().any(|arg| arg == "norender");
         let input_files: Vec<PathBuf> = std::iter::once(command.clone())
-            .chain(args.iter().filter(|arg| {
-                let arg = arg.to_lowercase();
-                arg.ends_with(".las") || arg.ends_with(".laz")
-            }).cloned())
+            .chain(
+                args.iter()
+                    .filter(|arg| {
+                        let arg = arg.to_lowercase();
+                        arg.ends_with(".las") || arg.ends_with(".laz")
+                    })
+                    .cloned(),
+            )
             .map(PathBuf::from)
             .collect();
 
@@ -434,7 +438,10 @@ fn main() {
             for (index, input_file) in input_files.iter().enumerate() {
                 let extension = input_file.extension().unwrap().to_string_lossy();
                 let memory_input = PathBuf::from(format!("input_{index}.{extension}"));
-                debug!("Copying input file into memory fs: {}", input_file.display());
+                debug!(
+                    "Copying input file into memory fs: {}",
+                    input_file.display()
+                );
                 fs.load_from_disk(input_file, &memory_input)
                     .expect("Could not copy input file into memory fs");
                 memory_input_files.push(memory_input);

@@ -387,11 +387,9 @@ pub fn process_tiles(
 
         for input_file in input_files {
             info!("Reading {}", input_file.display());
-            let mut reader = Reader::with_options(
-                fs.open(input_file).expect("Could not open file"),
-                options,
-            )
-            .expect("Could not create reader");
+            let mut reader =
+                Reader::with_options(fs.open(input_file).expect("Could not open file"), options)
+                    .expect("Could not create reader");
 
             let mut pd = PointDataBuilder::new().for_header(reader.header()).build();
             loop {
