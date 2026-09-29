@@ -551,42 +551,6 @@ fn main() {
                 }
             }
 
-            #[cfg(test)]
-            mod tests {
-                use super::{expand_input_paths, wildcard_matches};
-
-                #[test]
-                fn wildcard_matches_multiple_and_single_characters() {
-                    assert!(wildcard_matches("tile_*.laz", "tile_01.LAZ"));
-                    assert!(wildcard_matches("tile_0?.laz", "tile_01.laz"));
-                    assert!(!wildcard_matches("tile_0?.laz", "tile_001.laz"));
-                }
-
-                #[test]
-                fn expands_matching_input_files() {
-                    let directory = std::env::temp_dir().join(format!(
-                        "pullauta-wildcard-test-{}-{}",
-                        std::process::id(),
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_nanos()
-                    ));
-                    std::fs::create_dir_all(&directory).unwrap();
-                    std::fs::write(directory.join("one.laz"), []).unwrap();
-                    std::fs::write(directory.join("two.laz"), []).unwrap();
-                    std::fs::write(directory.join("ignore.txt"), []).unwrap();
-
-                    let pattern = directory.join("*.laz").to_string_lossy().into_owned();
-                    let paths = expand_input_paths(&[pattern]).unwrap();
-
-                    assert_eq!(
-                        paths,
-                        vec![directory.join("one.laz"), directory.join("two.laz")]
-                    );
-                    std::fs::remove_dir_all(directory).unwrap();
-                }
-            }
             copy(&fs, "pullautus.png");
             copy(&fs, "pullautus_depr.png");
         } else {
@@ -600,5 +564,42 @@ fn main() {
             )
             .unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expand_input_paths, wildcard_matches};
+
+    #[test]
+    fn wildcard_matches_multiple_and_single_characters() {
+        assert!(wildcard_matches("tile_*.laz", "tile_01.LAZ"));
+        assert!(wildcard_matches("tile_0?.laz", "tile_01.laz"));
+        assert!(!wildcard_matches("tile_0?.laz", "tile_001.laz"));
+    }
+
+    #[test]
+    fn expands_matching_input_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "pullauta-wildcard-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("one.laz"), []).unwrap();
+        std::fs::write(directory.join("two.laz"), []).unwrap();
+        std::fs::write(directory.join("ignore.txt"), []).unwrap();
+
+        let pattern = directory.join("*.laz").to_string_lossy().into_owned();
+        let paths = expand_input_paths(&[pattern]).unwrap();
+
+        assert_eq!(
+            paths,
+            vec![directory.join("one.laz"), directory.join("two.laz")]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
